@@ -149,21 +149,29 @@ public class AkkaRpcService implements RpcService {
         //ActorSystem scheduler的一个包装类。（是否每一个AcorSystem中，都会有一个Scheduler呢？或者是Flink里面定义的）
         internalScheduledExecutor = new ActorSystemScheduledExecutorAdapter(actorSystem);
 
+        //RPC服务停机之后的异步回调
         terminationFuture = new CompletableFuture<>();
 
+        //标记RPC服务的状态，当前是正在运行。（因此stopped是false）
         stopped = false;
-        //启动supervisorActor,（这个是否是最顶层的？）
+        //启动supervisorActor,（这个是否是最顶层的？supervisorActor应当是每个ActorSystem都有一个吧，应当是作为最顶层的Actor？）
+        //一个AkkaRpcService可被多个RpcEndpoint使用，为每个RpcEndpoint创建一个Actor。
+        //这些Actor都是supervisorActor的子Actor
+        //（这个supervisor是flink中规定的？如果不是，难道不应当是同ActorSystem一块启动吗？）
         supervisor = startSupervisorActor();
     }
 
     private Supervisor startSupervisorActor() {
+        //竟然定义了一个单个线程的线程池
         final ExecutorService terminationFutureExecutor =
                 Executors.newSingleThreadExecutor(
                         new ExecutorThreadFactory(
                                 "AkkaRpcService-Supervisor-Termination-Future-Executor"));
+        //创建一个SupervisorActor
         final ActorRef actorRef =
                 SupervisorActor.startSupervisorActor(actorSystem, terminationFutureExecutor);
 
+        //将SupervisorActor和对应的线程池包装一块作为Supervisor返回
         return Supervisor.create(actorRef, terminationFutureExecutor);
     }
 
@@ -186,6 +194,7 @@ public class AkkaRpcService implements RpcService {
     }
 
     // this method does not mutate state and is thus thread-safe
+    //此方法可以连接到远程RpcService。
     @Override
     public <C extends RpcGateway> CompletableFuture<C> connect(
             final String address, final Class<C> clazz) {
@@ -230,11 +239,16 @@ public class AkkaRpcService implements RpcService {
     }
 
     @Override
+    //starServer方法，在创建RpcEndpoint的时候调用。（在RpcEndpoint的构造方法中会调用此方法）
+    //指定泛型C，是RpcEndpoint和RpcGateway的共同子类型,但是RpcEndpoint本身就实现了RpcGateway，为什么还需这样写
     public <C extends RpcEndpoint & RpcGateway> RpcServer startServer(C rpcEndpoint) {
         checkNotNull(rpcEndpoint, "rpc endpoint");
 
+        //向SupervisorActor注册，生成一个新的Actor。
+        //每个rpcEndpoint都有一个对应一个Actor？
         final SupervisorActor.ActorRegistration actorRegistration =
                 registerAkkaRpcActor(rpcEndpoint);
+        //
         final ActorRef actorRef = actorRegistration.getActorRef();
         final CompletableFuture<Void> actorTerminationFuture =
                 actorRegistration.getTerminationFuture();
@@ -304,22 +318,30 @@ public class AkkaRpcService implements RpcService {
         return server;
     }
 
+    //starServer中，需要向SupervisorActor注册，生成一个新的Actor
     private <C extends RpcEndpoint & RpcGateway>
             SupervisorActor.ActorRegistration registerAkkaRpcActor(C rpcEndpoint) {
         final Class<? extends AbstractActor> akkaRpcActorType;
 
+        //判断RpcEndpoint的类型
         if (rpcEndpoint instanceof FencedRpcEndpoint) {
             akkaRpcActorType = FencedAkkaRpcActor.class;
         } else {
             akkaRpcActorType = AkkaRpcActor.class;
         }
 
+        //（为什么要加锁？）
         synchronized (lock) {
+            //先检查RpcService状态，需要不是stopped
             checkState(!stopped, "RpcService is stopped");
 
+            //从SupervisorActor创建一个新的Actor（返回的是创建时的相应消息）
             final SupervisorActor.StartAkkaRpcActorResponse startAkkaRpcActorResponse =
+                    //（这里需要supervisor、相应actor的工厂方法、endpointId）
                     SupervisorActor.startAkkaRpcActor(
+                            //获取SupervisorActor
                             supervisor.getActor(),
+                            //传入Actor构造工厂方法（记得，是一个方法propsFactory）
                             actorTerminationFuture ->
                                     Props.create(
                                             akkaRpcActorType,
@@ -327,9 +349,12 @@ public class AkkaRpcService implements RpcService {
                                             actorTerminationFuture,
                                             getVersion(),
                                             configuration.getMaximumFramesize()),
+                            //还需要endpoint的id
                             rpcEndpoint.getEndpointId());
 
+            //为actorRegistration绑定异常响应
             final SupervisorActor.ActorRegistration actorRegistration =
+                    //这个orElseThrow是指如果，调用者是空，则抛出异常
                     startAkkaRpcActorResponse.orElseThrow(
                             cause ->
                                     new AkkaRpcRuntimeException(
@@ -339,6 +364,7 @@ public class AkkaRpcService implements RpcService {
                                                     rpcEndpoint.getEndpointId()),
                                             cause));
 
+            //将这个新创建的actor和对应的rpcEndpoint对应关系保存
             actors.put(actorRegistration.getActorRef(), rpcEndpoint);
 
             return actorRegistration;

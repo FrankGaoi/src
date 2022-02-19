@@ -67,8 +67,10 @@ class SupervisorActor extends AbstractActor {
     }
 
     @Override
+    //在starAkkaRpcActor中，Patterns.ask发送给SupervisorActor消息，这里是接收了
     public Receive createReceive() {
         return receiveBuilder()
+                //如果接收了StarAkkaRpcActor类型的message
                 .match(StartAkkaRpcActor.class, this::createStartAkkaRpcActorMessage)
                 .matchAny(this::handleUnknownMessage)
                 .build();
@@ -102,26 +104,36 @@ class SupervisorActor extends AbstractActor {
                 terminationFutureExecutor);
     }
 
+    //当SupervisorActor接收到StarAkkaRpcActor类时调用此方法。（奇怪this::这个方法，为什么这个参数就传入了）
     private void createStartAkkaRpcActorMessage(StartAkkaRpcActor startAkkaRpcActor) {
+        //从接收到的消息中取回endpoint id
         final String endpointId = startAkkaRpcActor.getEndpointId();
+        //创建AkkaRpcActorRegistration。这里应当只是赋值了这个Registration的endpoint的id
         final AkkaRpcActorRegistration akkaRpcActorRegistration =
                 new AkkaRpcActorRegistration(endpointId);
 
+        //从接收道德消息中，取回属性工厂方法（属性工厂的方法，就是属性工厂方法？借此可以创建工厂？），创建出Props
+        //这个PropsFactory实际就一个create方法，将终止Future传入
         final Props akkaRpcActorProps =
                 startAkkaRpcActor
                         .getPropsFactory()
                         .create(akkaRpcActorRegistration.getInternalTerminationFuture());
 
+        //下面要真正开始创建actor了
         LOG.debug(
                 "Starting {} with name {}.",
                 akkaRpcActorProps.actorClass().getSimpleName(),
                 endpointId);
 
         try {
+            //创建出子actor，名为endpoint的id
             final ActorRef actorRef = getContext().actorOf(akkaRpcActorProps, endpointId);
 
+            //保存这个actor（这个归属RpcService的SupervisorActor，知每个子actor；）
             registeredAkkaRpcActors.put(actorRef, akkaRpcActorRegistration);
 
+            //将actor创建成功的消息发送回调用端（就是自己返回给自己吧。。。（SupervisorActor））
+            //表示创建成功的注册信息ActorRegistration也返回
             getSender()
                     .tell(
                             StartAkkaRpcActorResponse.success(
@@ -197,8 +209,12 @@ class SupervisorActor extends AbstractActor {
         return actorSystem.actorOf(supervisorProps, getActorName());
     }
 
+    //创建Actor的方法。
+    //starServer中，需要向SupervisorActor注册，生成一个新的Actor。这就是新建Actor时的方法
     public static StartAkkaRpcActorResponse startAkkaRpcActor(
             ActorRef supervisor, StartAkkaRpcActor.PropsFactory propsFactory, String endpointId) {
+        //调用SupervisorActor并同步等待结果。（就是等到结果，再往下走）
+        //发送给SupervisorActor的消息通过createStartAkkaRpcActorMessage创建。（发的这个消息，对应actor是noSender吗？如果是，那么这个方法又为什么在SupervisorActor中呢？）
         return Patterns.ask(
                         supervisor,
                         createStartAkkaRpcActorMessage(propsFactory, endpointId),
