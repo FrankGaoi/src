@@ -195,6 +195,7 @@ public class AkkaRpcService implements RpcService {
 
     // this method does not mutate state and is thus thread-safe
     //此方法可以连接到远程RpcService。
+    //1参是给定地址，2参是和远程通信的途径（出入口、途径、方法。这里应当是指要调用的功能？）。
     @Override
     public <C extends RpcGateway> CompletableFuture<C> connect(
             final String address, final Class<C> clazz) {
@@ -202,6 +203,9 @@ public class AkkaRpcService implements RpcService {
         return connectInternal(
                 address,
                 clazz,
+                //3参是一个工厂方法
+                //从actorRef创建出InvocationHandler
+                //这个方法会在connectInternal中使用
                 (ActorRef actorRef) -> {
                     Tuple2<String, String> addressHostname = extractAddressHostname(actorRef);
 
@@ -554,26 +558,35 @@ public class AkkaRpcService implements RpcService {
                 address,
                 clazz.getName());
 
+        //从远程地址获取ActorRef，并且有超时时间的，具体可以进去看方法
         final CompletableFuture<ActorRef> actorRefFuture = resolveActorAddress(address);
 
+        //获取到ActorRef后执行
         final CompletableFuture<HandshakeSuccessMessage> handshakeFuture =
+                //通过前面获取ActorRef后做的
                 actorRefFuture.thenCompose(
                         (ActorRef actorRef) ->
                                 FutureUtils.toJava(
+                                        //发送RemoteHandshakeMessage给远端
+                                        //这是握手消息
                                         Patterns.ask(
                                                         actorRef,
                                                         new RemoteHandshakeMessage(
                                                                 clazz, getVersion()),
                                                         configuration.getTimeout().toMilliseconds())
+                                                //握手成功后的消息，还需要map转成什么？
                                                 .<HandshakeSuccessMessage>mapTo(
                                                         ClassTag$.MODULE$
                                                                 .<HandshakeSuccessMessage>apply(
                                                                         HandshakeSuccessMessage
                                                                                 .class))));
 
+        //返回一个创建RpcGateway的CompletableFuture（拿到握手成功的消息，可以返回）
         return actorRefFuture.thenCombineAsync(
                 handshakeFuture,
+                //这个二参的方法，就是在握手操作完毕后执行的
                 (ActorRef actorRef, HandshakeSuccessMessage ignored) -> {
+                    //使用前面方法传入的invocationHandlerFactory,使用actorRef创建出一个AkkaInvocationHandler
                     InvocationHandler invocationHandler = invocationHandlerFactory.apply(actorRef);
 
                     // Rather than using the System ClassLoader directly, we derive the ClassLoader
@@ -583,6 +596,7 @@ public class AkkaRpcService implements RpcService {
                     // ClassLoader
                     ClassLoader classLoader = getClass().getClassLoader();
 
+                    //创建出代理类，类型转化为C类型（应当就是一个actor的某个功能？强转后就只剩实现一个gateway的方法？）
                     @SuppressWarnings("unchecked")
                     C proxy =
                             (C)
@@ -591,6 +605,7 @@ public class AkkaRpcService implements RpcService {
 
                     return proxy;
                 },
+                //这个应当是线程池？
                 actorSystem.dispatcher());
     }
 

@@ -62,6 +62,8 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * in a {@link LocalRpcInvocation} message and then sends it to the {@link AkkaRpcActor} where it is
  * executed.
  */
+//无论是RpcServer还是C extends RpcGateway都用了JDK的动态代理。
+//真实执行逻辑在AkkaInvocationHandler
 class AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, RpcServer {
     private static final Logger LOG = LoggerFactory.getLogger(AkkaInvocationHandler.class);
 
@@ -108,12 +110,16 @@ class AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, Rpc
         this.captureAskCallStack = captureAskCallStack;
     }
 
+    //其实就是拿到方法，看怎么对方法执行。
+    //invoke方法会根据声明method的位置，决定调用AkkaInvocationHandler中的方法还是走远程调用。
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        //获取声明该方法的class或接口
         Class<?> declaringClass = method.getDeclaringClass();
 
         Object result;
 
+        //如果method在这几个接口或类中定义，本地调用AkkaInvocationHandler的同名方法。
         if (declaringClass.equals(AkkaBasedEndpoint.class)
                 || declaringClass.equals(Object.class)
                 || declaringClass.equals(RpcGateway.class)
@@ -122,6 +128,7 @@ class AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, Rpc
                 || declaringClass.equals(RpcServer.class)) {
             result = method.invoke(this, args);
         } else if (declaringClass.equals(FencedRpcGateway.class)) {
+            //不支持FencedRpcGateway中的方法。（那这个类的方法上哪执行？）
             throw new UnsupportedOperationException(
                     "AkkaInvocationHandler does not support the call FencedRpcGateway#"
                             + method.getName()
@@ -129,6 +136,7 @@ class AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, Rpc
                             + "fencing token. Please use RpcService#connect(RpcService, F, Time) with F being the fencing token to "
                             + "retrieve a properly FencedRpcGateway.");
         } else {
+            //如果method不属于上面所有的接口/类，走rpc远程调用
             result = invokeRpc(method, args);
         }
 
@@ -193,7 +201,7 @@ class AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, Rpc
 
     /**
      * Invokes a RPC method by sending the RPC invocation details to the rpc endpoint.
-     *
+     * 如果执行的是个rpc方法，将相关参发给endpoint
      * @param method to call
      * @param args of the method call
      * @return result of the RPC
@@ -202,16 +210,21 @@ class AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, Rpc
     private Object invokeRpc(Method method, Object[] args) throws Exception {
         String methodName = method.getName();
         Class<?>[] parameterTypes = method.getParameterTypes();
+        //获取所有参数附带的注解，以二维数组形式返回
         Annotation[][] parameterAnnotations = method.getParameterAnnotations();
+        //从方法参数中获取RpcTimeout注解标记的参数（关于超时的参数，竟然使用注解进行了标注）
         Time futureTimeout = extractRpcTimeout(parameterAnnotations, args, timeout);
 
+        //创建，Actor需要发送的信息，包含method调用的必要参数。（将消息封装一下）
         final RpcInvocation rpcInvocation =
                 createRpcInvocationMessage(methodName, parameterTypes, args);
 
+        //获取方法的返回类型
         Class<?> returnType = method.getReturnType();
 
         final Object result;
 
+        //如果没有返回值，直接tell发送给远程
         if (Objects.equals(returnType, Void.TYPE)) {
             tell(rpcInvocation);
 
@@ -222,26 +235,33 @@ class AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, Rpc
             // initially only
             // capture a lightweight native pointer, and convert that into the stack trace lazily
             // when needed.
+            //获取调用栈，用于拼装stacksTrace（堆栈轨迹）
             final Throwable callStackCapture = captureAskCallStack ? new Throwable() : null;
 
             // execute an asynchronous call
+            //发送个异步调用
+            //发送rpcInvocation给远程Actor并等待回复（这个rpcInvocation相当于发送的消息信息），超时时间为futureTimeout
             final CompletableFuture<?> resultFuture = ask(rpcInvocation, futureTimeout);
 
             final CompletableFuture<Object> completableFuture = new CompletableFuture<>();
+            //获取远程调用的结果。
             resultFuture.whenComplete(
                     (resultValue, failure) -> {
                         if (failure != null) {
                             completableFuture.completeExceptionally(
                                     resolveTimeoutException(failure, callStackCapture, method));
                         } else {
+                            //如果需要则反序列化（据说返回值为AkkaRpcSerializedValue）
                             completableFuture.complete(
                                     deserializeValueIfNeeded(resultValue, method));
                         }
                     });
 
+            //如果返回值为CompletableFuture类型，直接赋给result
             if (Objects.equals(returnType, CompletableFuture.class)) {
                 result = completableFuture;
             } else {
+                //否则从completableFuture阻塞等待获取值之后返回。（这里的get应当就是阻塞了吧）
                 try {
                     result =
                             completableFuture.get(futureTimeout.getSize(), futureTimeout.getUnit());
@@ -265,18 +285,23 @@ class AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, Rpc
      * @return RpcInvocation message which encapsulates the RPC details
      * @throws IOException if we cannot serialize the RPC invocation parameters
      */
+    //这里就是封装了要调用的rpc方法所需消息的载体
     protected RpcInvocation createRpcInvocationMessage(
             final String methodName, final Class<?>[] parameterTypes, final Object[] args)
             throws IOException {
         final RpcInvocation rpcInvocation;
 
+        //如果是本地调用。创建LocalRpcInvocation
         if (isLocal) {
             rpcInvocation = new LocalRpcInvocation(methodName, parameterTypes, args);
         } else {
+            //否则创建remoteRpcInvocation
             try {
                 RemoteRpcInvocation remoteRpcInvocation =
                         new RemoteRpcInvocation(methodName, parameterTypes, args);
 
+                //检查序列化之后的消息是否超过了了最大帧大小
+                //如果超过了不让发送
                 if (remoteRpcInvocation.getSize() > maximumFramesize) {
                     throw new IOException(
                             String.format(

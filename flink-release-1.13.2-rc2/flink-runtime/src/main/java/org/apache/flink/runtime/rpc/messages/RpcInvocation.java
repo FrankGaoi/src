@@ -24,6 +24,8 @@ import java.io.IOException;
  * Interface for rpc invocation messages. The interface allows to request all necessary information
  * to lookup a method and call it with the corresponding arguments.
  */
+//此类是RPC调用发送给远程Actor的信息载体
+//封装了远程方法调用的3个必要参。（方法名、参数类型列表、参数列表）
 public interface RpcInvocation {
 
     /**

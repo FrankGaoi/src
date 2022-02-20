@@ -34,10 +34,13 @@ import java.io.Serializable;
  * the parameter types and the arguments are eagerly serialized. In case the invocation call
  * contains a non-serializable object, then an {@link IOException} is thrown.
  */
+//remoteRpcInvocation是需要被传递到远端的，因此需要支持序列化。看其是怎么把3参序列化的
+//其信息载体为内部类MethodInvocation，同样有3要素
 public class RemoteRpcInvocation implements RpcInvocation, Serializable {
     private static final long serialVersionUID = 6179354390913843809L;
 
     // Serialized invocation data
+    //消息发到远端时，收到的实际是这个。里面是serializedData[]，是字节数组类型。
     private SerializedValue<RemoteRpcInvocation.MethodInvocation> serializedMethodInvocation;
 
     // Transient field which is lazily initialized upon first access to the invocation data
@@ -145,6 +148,7 @@ public class RemoteRpcInvocation implements RpcInvocation, Serializable {
     private static final class MethodInvocation implements Serializable {
         private static final long serialVersionUID = 9187962608946082519L;
 
+        //3要素
         private String methodName;
         private Class<?>[] parameterTypes;
         private Object[] args;
@@ -168,18 +172,24 @@ public class RemoteRpcInvocation implements RpcInvocation, Serializable {
             return args;
         }
 
+        //下面是将参序列化的方法
         private void writeObject(ObjectOutputStream oos) throws IOException {
+            //首先写入方法名
             oos.writeUTF(methodName);
 
+            //写入参数个数
             oos.writeInt(parameterTypes.length);
 
+            //逐个写入参数类型
             for (Class<?> parameterType : parameterTypes) {
                 oos.writeObject(parameterType);
             }
 
             if (args != null) {
+                //如果有参数列表，先写入true
                 oos.writeBoolean(true);
 
+                //逐个写入参数个数
                 for (int i = 0; i < args.length; i++) {
                     try {
                         oos.writeObject(args[i]);
@@ -197,10 +207,12 @@ public class RemoteRpcInvocation implements RpcInvocation, Serializable {
                     }
                 }
             } else {
+                //如果没有参数列表，写入false
                 oos.writeBoolean(false);
             }
         }
 
+        //反序列化
         private void readObject(ObjectInputStream ois) throws IOException, ClassNotFoundException {
             methodName = ois.readUTF();
 
