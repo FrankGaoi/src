@@ -41,6 +41,7 @@ import java.util.Set;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 
 /** Lightweight configuration object which stores key/value pairs. */
+//存储键值对轻量配置对象
 @Public
 public class Configuration extends ExecutionConfig.GlobalJobParameters
         implements IOReadableWritable,
@@ -63,6 +64,7 @@ public class Configuration extends ExecutionConfig.GlobalJobParameters
     private static final Logger LOG = LoggerFactory.getLogger(Configuration.class);
 
     /** Stores the concrete key/value pairs of this configuration object. */
+    //存储这个配置对象的具体的键值对
     protected final HashMap<String, Object> confData;
 
     // --------------------------------------------------------------------------------------------

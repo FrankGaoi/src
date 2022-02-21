@@ -34,12 +34,14 @@ import org.junit.Test;
 import java.util.concurrent.CompletableFuture;
 
 /** Tests for the {@link akka.actor.ActorSystem} instantiated through {@link AkkaUtils}. */
+//对用工具类AkkaUtils创建ActorSystem进行了测试
 public class AkkaActorSystemTest extends TestLogger {
 
     @Test
     public void shutsDownOnActorFailure() {
+        //这里传入的Configuration，是Flink自定义的配置对象，实际存储的就是HashMap，这样默认的传入就是相当于空的
+        //并且createLocalActorSystem就意味着装配AkkaConfig时，externalAddress是None
         final ActorSystem actorSystem = AkkaUtils.createLocalActorSystem(new Configuration());
-
         try {
             final CompletableFuture<Terminated> terminationFuture =
                     actorSystem.getWhenTerminated().toCompletableFuture();

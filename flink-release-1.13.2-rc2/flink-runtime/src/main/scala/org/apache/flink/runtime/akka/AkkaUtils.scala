@@ -64,7 +64,9 @@ object AkkaUtils {
    * @param configuration instance containing the user provided configuration values
    * @return The created actor system
    */
+    //创建一个没有远端功能（不能远程通信的）本地ActorSystem
   def createLocalActorSystem(configuration: Configuration): ActorSystem = {
+      //这里步步传入，实际上就获得了个默认的配置。
     val akkaConfig = getAkkaConfig(configuration, None)
     createActorSystem(akkaConfig)
   }
