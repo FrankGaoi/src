@@ -38,6 +38,13 @@ import java.util.concurrent.CompletableFuture;
  * @param <F> type of the fencing token
  * @param <T> type of the RpcEndpoint
  */
+//在AkkaRpcActor之外，添加了Fenced机制，此机制是为了避免脑裂而设计。
+//使用FencingToken来标记可接收哪个发送者的消息。
+
+//举个例子：JobManager配置了HA，存在2个JM。
+//一开始JM1为leader，FencingToken被设置为JM1的ID，远端都只接收JM1发来的消息。
+//突然JM1崩溃，JM2成为leader。FencingToken被设置为JM2的ID.这时，远端都只接收JM2发来的消息。
+//过了一会儿，JM1恢复。在它得知自己失去leader状态之前，仍会发送消息。此时，因为FencedToken已经更改，校验失败，远端拒绝接收JM1发来的消息，避免了脑裂问题。
 public class FencedAkkaRpcActor<F extends Serializable, T extends FencedRpcEndpoint<F> & RpcGateway>
         extends AkkaRpcActor<T> {
 

@@ -79,6 +79,10 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  *
  * @param <T> Type of the {@link RpcEndpoint}
  */
+//Flink中所有AkkaRpcActor都是SupervisorActor的子actor
+//SupervisorActor的创建和启动在AkkaRpcService启动时（看AkkaRpcService的构造方法）
+//AkkaActor在starServer中创建，starServer在创建RpcEndpoint时调用（见RpcEndpoint的构造方法）.
+//还有一种fenced版本，具体看FencedAkkaRpcActor。除了Fencing机制外，二者没有差别。
 class AkkaRpcActor<T extends RpcEndpoint & RpcGateway> extends AbstractActor {
 
     protected final Logger log = LoggerFactory.getLogger(getClass());
@@ -142,6 +146,8 @@ class AkkaRpcActor<T extends RpcEndpoint & RpcGateway> extends AbstractActor {
     }
 
     @Override
+    //AkkaRpcActor接收message的处理方法。
+    //可以看到主要就是3种处理状况。（握手、控制（改变actor的启动停止状态等）、普通）
     public Receive createReceive() {
         return ReceiveBuilder.create()
                 .match(RemoteHandshakeMessage.class, this::handleHandshakeMessage)
@@ -152,11 +158,14 @@ class AkkaRpcActor<T extends RpcEndpoint & RpcGateway> extends AbstractActor {
 
     private void handleMessage(final Object message) {
         if (state.isRunning()) {
+            //确保handleRpcMessage方法没有被多线程调用（看不懂，为什么通过这里是确保方法没有被多线程调用）
             mainThreadValidator.enterMainThread();
 
             try {
+                //处理rpc消息
                 handleRpcMessage(message);
             } finally {
+                //处理完后（退出主线程？这样的行到底代表什么样的意思）
                 mainThreadValidator.exitMainThread();
             }
         } else {
@@ -203,11 +212,16 @@ class AkkaRpcActor<T extends RpcEndpoint & RpcGateway> extends AbstractActor {
         sendErrorIfSender(new AkkaUnknownMessageException(message));
     }
 
+    //此方法在handleMessage中调用
+    //进一步根据message的类型拆分逻辑，调用相应的处理方法。
     protected void handleRpcMessage(Object message) {
+        //RunAsync是异步无返回值调用
         if (message instanceof RunAsync) {
             handleRunAsync((RunAsync) message);
+        //CallAsync是异步有返回值调用
         } else if (message instanceof CallAsync) {
             handleCallAsync((CallAsync) message);
+        //RpcInvocation是RPC方法调用（话说rpc方法调用不是应当将上面两种情况都涵盖在里面了？）
         } else if (message instanceof RpcInvocation) {
             handleRpcInvocation((RpcInvocation) message);
         } else {
@@ -263,14 +277,18 @@ class AkkaRpcActor<T extends RpcEndpoint & RpcGateway> extends AbstractActor {
      *
      * @param rpcInvocation Rpc invocation message
      */
+    //此方法在handleRpcMessage中调用，具体用来处理rpc调用的message
     private void handleRpcInvocation(RpcInvocation rpcInvocation) {
         Method rpcMethod = null;
 
         try {
+            //获取方法名和参数列表
             String methodName = rpcInvocation.getMethodName();
             Class<?>[] parameterTypes = rpcInvocation.getParameterTypes();
 
+            //从rpcEndpoint中查找匹配的方法
             rpcMethod = lookupRpcMethod(methodName, parameterTypes);
+            //如果出错，将错误信息返回给调用者
         } catch (ClassNotFoundException e) {
             log.error("Could not load method arguments.", e);
 
@@ -291,15 +309,19 @@ class AkkaRpcActor<T extends RpcEndpoint & RpcGateway> extends AbstractActor {
             getSender().tell(new Status.Failure(rpcException), getSelf());
         }
 
+        //如果找到相应方法
         if (rpcMethod != null) {
             try {
                 // this supports declaration of anonymous classes
+                //设置方法可以被访问
                 rpcMethod.setAccessible(true);
 
+                //如果方法没有返回值，直接调用
                 if (rpcMethod.getReturnType().equals(Void.TYPE)) {
                     // No return value to send back
                     rpcMethod.invoke(rpcEndpoint, rpcInvocation.getArgs());
                 } else {
+                    //如果有返回值，调用后将返回值获取
                     final Object result;
                     try {
                         result = rpcMethod.invoke(rpcEndpoint, rpcInvocation.getArgs());
@@ -314,10 +336,13 @@ class AkkaRpcActor<T extends RpcEndpoint & RpcGateway> extends AbstractActor {
 
                     final String methodName = rpcMethod.getName();
 
+                    //判断返回值是否是CompletableFuture，如果是，说明结果可以异步返回。
+                    //（这里同步异步还是有意义的吧，代表上面rpcMethod.invoke是卡在那执行，还是可以往下走。不过这异步的机制真的奇怪，是怎么做到远程通信异步返回的？）
                     if (result instanceof CompletableFuture) {
                         final CompletableFuture<?> responseFuture = (CompletableFuture<?>) result;
                         sendAsyncResponse(responseFuture, methodName);
                     } else {
+                        //否则同步返回调用结果
                         sendSyncResponse(result, methodName);
                     }
                 }
@@ -329,6 +354,7 @@ class AkkaRpcActor<T extends RpcEndpoint & RpcGateway> extends AbstractActor {
         }
     }
 
+    //为同步返回结果。只是不用再返回future给调用端
     private void sendSyncResponse(Object response, String methodName) {
         if (isRemoteSender(getSender())) {
             Either<AkkaRpcSerializedValue, AkkaRpcException> serializedResult =
@@ -344,22 +370,28 @@ class AkkaRpcActor<T extends RpcEndpoint & RpcGateway> extends AbstractActor {
         }
     }
 
+    //在handleRpcInvocation中，如果结果是异步返回的，将会调用此方法处理结果
     private void sendAsyncResponse(CompletableFuture<?> asyncResponse, String methodName) {
         final ActorRef sender = getSender();
         Promise.DefaultPromise<Object> promise = new Promise.DefaultPromise<>();
 
         FutureUtils.assertNoException(
+                //这里是拿到结果后，这般处理吧。。
                 asyncResponse.handle(
                         (value, throwable) -> {
+                            //检查异步结果是否有异常
                             if (throwable != null) {
                                 promise.failure(throwable);
                             } else {
                                 if (isRemoteSender(sender)) {
+                                    //如果是远端发送的调用
+                                    //将返回结果序列化
                                     Either<AkkaRpcSerializedValue, AkkaRpcException>
                                             serializedResult =
                                                     serializeRemoteResultAndVerifySize(
                                                             value, methodName);
 
+                                    //如果序列化成功，调用promise.success,否则调用failure
                                     if (serializedResult.isLeft()) {
                                         promise.success(serializedResult.left());
                                     } else {
@@ -374,6 +406,7 @@ class AkkaRpcActor<T extends RpcEndpoint & RpcGateway> extends AbstractActor {
                             return null;
                         }));
 
+        //发送future到调用端
         Patterns.pipe(promise.future(), getContext().dispatcher()).to(sender);
     }
 

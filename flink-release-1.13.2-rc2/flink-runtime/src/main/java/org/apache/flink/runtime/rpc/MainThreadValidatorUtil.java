@@ -32,6 +32,8 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * <p>The {@code currentMainThread} can be hidden from {@code RpcEndpoint} implementations and only
  * be accessed via this utility from other packages.
  */
+//主线程校验工具？
+//（此实用程序存在的目的是为了在线程当前RpcEndpoint具有可见性？（就是rpcEndpoint不重复使用此线程？））
 public final class MainThreadValidatorUtil {
 
     private static final Logger LOG = LoggerFactory.getLogger(MainThreadValidatorUtil.class);

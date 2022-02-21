@@ -98,6 +98,7 @@ public abstract class RpcEndpoint implements RpcGateway, AutoCloseableAsync {
      * A reference to the endpoint's main thread, if the current method is called by the main
      * thread.
      */
+    //一个endpoint的主线程引用。（后面描述：如果当前方法被主线程调用是什么意思？）
     final AtomicReference<Thread> currentMainThread = new AtomicReference<>(null);
 
     /**
