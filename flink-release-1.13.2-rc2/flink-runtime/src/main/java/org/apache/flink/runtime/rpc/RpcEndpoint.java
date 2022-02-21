@@ -79,6 +79,9 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * The running state can be queried in a RPC method handler or in the main thread by calling {@link
  * #isRunning()} method.
  */
+//其为提供RPC服务的被调用端。
+//需要接收远程调用的类如JobManager、TaskExecutor、Dispatcher等都需要继承这个RpcEndpoint
+//另外RpcEndpoint还可以在Actor主线程池定时执行Runnable。
 public abstract class RpcEndpoint implements RpcGateway, AutoCloseableAsync {
 
     protected final Logger log = LoggerFactory.getLogger(getClass());
@@ -343,6 +346,7 @@ public abstract class RpcEndpoint implements RpcGateway, AutoCloseableAsync {
      * @param runnable Runnable to be executed
      * @param delay The delay after which the runnable will be executed
      */
+    //这里就是RpcEndpoint可在Actor主线程池定时执行Runnable的方法。
     protected void scheduleRunAsync(Runnable runnable, Time delay) {
         scheduleRunAsync(runnable, delay.getSize(), delay.getUnit());
     }

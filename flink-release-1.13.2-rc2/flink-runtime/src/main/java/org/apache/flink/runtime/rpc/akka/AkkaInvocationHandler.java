@@ -154,6 +154,7 @@ class AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, Rpc
     }
 
     @Override
+    //会使对应的rpcEndpoint在Actor主线程池定时执行Runnable
     public void scheduleRunAsync(Runnable runnable, long delayMillis) {
         checkNotNull(runnable, "runnable");
         checkArgument(delayMillis >= 0, "delay must be zero or greater");
@@ -381,6 +382,7 @@ class AkkaInvocationHandler implements InvocationHandler, AkkaBasedEndpoint, Rpc
      *
      * @param message to send to the RPC endpoint.
      */
+    //将message发送给rpcEndpoint对应的actor
     protected void tell(Object message) {
         rpcEndpoint.tell(message, ActorRef.noSender());
     }
