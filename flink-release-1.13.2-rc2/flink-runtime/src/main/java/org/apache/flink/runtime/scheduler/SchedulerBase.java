@@ -824,13 +824,17 @@ public abstract class SchedulerBase implements SchedulerNG, CheckpointScheduling
     @Override
     public CompletableFuture<String> triggerSavepoint(
             final String targetDirectory, final boolean cancelJob) {
+        //确保运行在主线程。（在rpc中，用actor处理消息时，也有类似的代码，不知这里是如何做到的。）
         mainThreadExecutor.assertRunningInMainThread();
 
+        //从executionGraph获取checkpointCoordinator.
+        // (JobMaster中有SchedulerNG，将一个SchedulerBase对象赋给它，而这个SchedulerBase对象持有executionGraph,就可以顺利得到executionGraph了)
         final CheckpointCoordinator checkpointCoordinator =
                 executionGraph.getCheckpointCoordinator();
         if (checkpointCoordinator == null) {
             throw new IllegalStateException(
                     String.format("Job %s is not a streaming job.", jobGraph.getJobID()));
+            //确保配置了savepoint默认存储目录，或者方法中传入了存储目录。
         } else if (targetDirectory == null
                 && !checkpointCoordinator.getCheckpointStorage().hasDefaultSavepointLocation()) {
             log.info(
@@ -850,20 +854,30 @@ public abstract class SchedulerBase implements SchedulerNG, CheckpointScheduling
                 cancelJob ? "cancel-with-" : "",
                 jobGraph.getJobID());
 
+        //如果是取消作业，停止checkpointScheduler（应当就是停止调度，在停止阶段，就不会再尝试发送barrier了？）
+        //（就是在触发之前，先确定一下不会是进入cancel阶段了）
         if (cancelJob) {
             stopCheckpointScheduler();
         }
 
+
         return checkpointCoordinator
+                //先触发一次savepoint操作（实际上触发savepoint或是checkpoint都是如此做吧）
                 .triggerSavepoint(targetDirectory)
+                //这里好似是返回checkpoint操作保存的文件路径
                 .thenApply(CompletedCheckpoint::getExternalPointer)
+                //最后
                 .handleAsync(
                         (path, throwable) -> {
+                            //如果之前步骤抛出异常，并且要取消作业
+                            //则再次启动checkpointScheduler，并抛出异常(为什么要求取消作业，并且抛出异常时，需要重新开启cp？？？)
                             if (throwable != null) {
                                 if (cancelJob) {
                                     startCheckpointScheduler();
                                 }
                                 throw new CompletionException(throwable);
+                                //如果需要取消作业，但之前未抛异常
+                                //直接取消任务的执行
                             } else if (cancelJob) {
                                 log.info(
                                         "Savepoint stored in {}. Now cancelling {}.",

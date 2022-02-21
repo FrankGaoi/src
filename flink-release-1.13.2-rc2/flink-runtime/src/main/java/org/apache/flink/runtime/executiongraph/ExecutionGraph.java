@@ -80,6 +80,16 @@ public interface ExecutionGraph extends AccessExecutionGraph {
 
     SchedulingTopology getSchedulingTopology();
 
+    //ExecutionGraph的enableCheckpointing方法，创建了一个checkpointCoordinator对象（实际是创建并赋值）。
+    //该对象运行在JobManager中，负责统筹这个分布式系统中的checkpoint过程。
+
+    //该对象的作用：
+    //1.定期触发checkpoint操作。（即命令数据源，发送checkpoint barrier）
+    //2.接收各个operator的某个checkpoint完成确认消息。
+    //3.对于某次checkpoint，当接收到所有operator的确认消息之时，发送消息通知各个operator，该次checkpoint完成
+    //4.保存已完成和正在进行中的checkpoint的相关信息。（保存信息，其余3点都是偏向于动词，触发、接收、通知。这个就是保存）
+
+    //关于具体的创建，我们可以看到它的ExecutionGraph的default实现
     void enableCheckpointing(
             CheckpointCoordinatorConfiguration chkConfig,
             List<MasterTriggerRestoreHook<?>> masterHooks,
