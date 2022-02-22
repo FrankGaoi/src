@@ -30,6 +30,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * The plan of one checkpoint, indicating which tasks to trigger, waiting for acknowledge or commit
  * for one specific checkpoint.
  */
+//一次checkpoint的plan。含有要触发的tasks等。。。
 class CheckpointPlan {
 
     /** Tasks who need to be sent a message when a checkpoint is started. */

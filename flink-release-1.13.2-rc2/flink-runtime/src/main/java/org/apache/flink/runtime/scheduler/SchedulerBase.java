@@ -822,6 +822,8 @@ public abstract class SchedulerBase implements SchedulerNG, CheckpointScheduling
     }
 
     @Override
+    //JobMaster的triggerSavepoint里的schedulerNG.triggerSavepoint调用的是SchedulerBase的此方法
+    //SchedulerBase实现了SchedulerNG接口
     public CompletableFuture<String> triggerSavepoint(
             final String targetDirectory, final boolean cancelJob) {
         //确保运行在主线程。（在rpc中，用actor处理消息时，也有类似的代码，不知这里是如何做到的。）
@@ -829,6 +831,7 @@ public abstract class SchedulerBase implements SchedulerNG, CheckpointScheduling
 
         //从executionGraph获取checkpointCoordinator.
         // (JobMaster中有SchedulerNG，将一个SchedulerBase对象赋给它，而这个SchedulerBase对象持有executionGraph,就可以顺利得到executionGraph了)
+        //ExecutionGraph里的enableCheckpointing方法创建了checkpointCoordinator对象
         final CheckpointCoordinator checkpointCoordinator =
                 executionGraph.getCheckpointCoordinator();
         if (checkpointCoordinator == null) {
@@ -871,6 +874,7 @@ public abstract class SchedulerBase implements SchedulerNG, CheckpointScheduling
                         (path, throwable) -> {
                             //如果之前步骤抛出异常，并且要取消作业
                             //则再次启动checkpointScheduler，并抛出异常(为什么要求取消作业，并且抛出异常时，需要重新开启cp？？？)
+                            //(这个starCheckpointScheduler里到底做了什么呢？后面再看)
                             if (throwable != null) {
                                 if (cancelJob) {
                                     startCheckpointScheduler();

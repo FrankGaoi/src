@@ -93,6 +93,8 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * acknowledgements. It also collects and maintains the overview of the state handles reported by
  * the tasks that acknowledge the checkpoint.
  */
+//负责协调所有算子的分布式快照和状态。
+//它向相关的task发送消息来触发快照动作，之后收集它们快照成功的确认消息。
 public class CheckpointCoordinator {
 
     private static final Logger LOG = LoggerFactory.getLogger(CheckpointCoordinator.class);
@@ -495,6 +497,7 @@ public class CheckpointCoordinator {
      *     is true, but the periodic scheduler is disabled, the checkpoint will be declined.
      * @return a future to the completed checkpoint.
      */
+    //定时调度任务逻辑ScheduledTrigger，其内的run就是调用此方法
     public CompletableFuture<CompletedCheckpoint> triggerCheckpoint(boolean isPeriodic) {
         return triggerCheckpoint(checkpointProperties, null, isPeriodic);
     }
@@ -512,6 +515,8 @@ public class CheckpointCoordinator {
                             "Only synchronous savepoints are allowed to advance the watermark to MAX."));
         }
 
+        //和之前版本的不同了。这里封装成了个request。
+        //其内有几个参timestamp props externalSavepointLocation isPeriodic。这几个参原本都是传入triggerCheckpoint中被使用的
         CheckpointTriggerRequest request =
                 new CheckpointTriggerRequest(props, externalSavepointLocation, isPeriodic);
         chooseRequestToExecute(request).ifPresent(this::startTriggeringCheckpoint);
@@ -530,9 +535,11 @@ public class CheckpointCoordinator {
 
             final long timestamp = System.currentTimeMillis();
 
+            //这个checkpoint的执行计划看不懂
             CompletableFuture<CheckpointPlan> checkpointPlanFuture =
                     checkpointPlanCalculator.calculateCheckpointPlan();
 
+            //创建一个进行中的checkpoint？（为什么这里是future的？与之前版本不同了）
             final CompletableFuture<PendingCheckpoint> pendingCheckpointCompletableFuture =
                     checkpointPlanFuture
                             .thenApplyAsync(
@@ -551,6 +558,7 @@ public class CheckpointCoordinator {
                                     },
                                     executor)
                             .thenApplyAsync(
+                                    //这里才是实际创建一个pending的checkpoint
                                     (checkpointInfo) ->
                                             createPendingCheckpoint(
                                                     timestamp,
@@ -710,6 +718,7 @@ public class CheckpointCoordinator {
             }
         }
 
+        //这里应是创建一个pending的checkpoint
         final PendingCheckpoint checkpoint =
                 new PendingCheckpoint(
                         job,
@@ -722,6 +731,7 @@ public class CheckpointCoordinator {
                         checkpointStorageLocation,
                         onCompletionPromise);
 
+        //这里应是获取状态report回调，并设置状态回调（什么叫设置状态回调）
         trackPendingCheckpointStats(checkpoint);
 
         synchronized (lock) {
@@ -1718,8 +1728,9 @@ public class CheckpointCoordinator {
     // --------------------------------------------------------------------------------------------
     //  Periodic scheduling of checkpoints
     // --------------------------------------------------------------------------------------------
-
+    //监听器CheckpointCoordinatorDeActivator坚听到Job状态成为running时，会执行此方法
     public void startCheckpointScheduler() {
+        //为什么要加同步锁？哪里会导致线程安全问题？
         synchronized (lock) {
             if (shutdown) {
                 throw new IllegalArgumentException("Checkpoint coordinator is shut down");
@@ -1729,9 +1740,15 @@ public class CheckpointCoordinator {
                     "Can not start checkpoint scheduler, if no periodic checkpointing is configured");
 
             // make sure all prior timers are cancelled
+            //（确保之前的定时器被取消了）
+            //先停止之前创建的scheduler（为什么需要先停止之前的scheduler呢？之前为什么会有创建的scheduler？）
             stopCheckpointScheduler();
 
+            //下面应当就是创建一个新的scheduler
             periodicScheduling = true;
+            //延迟一段时间后启动定时checkpoint触发任务
+            //延迟时间为checkpoint间隔最短时间到checkpoint间隔时间+1（开区间）之间的随机值。（说明叫作间隔最短时间？是将要到来的checkpoint最短时间么？依照说明确定将要到了的checkpoint时间点？）
+            //scheduleTriggerWithDelay方法启动了一个checkpoint操作定时触发器
             currentPeriodicTrigger = scheduleTriggerWithDelay(getRandomInitDelay());
         }
     }
@@ -1798,6 +1815,9 @@ public class CheckpointCoordinator {
         return ThreadLocalRandom.current().nextLong(minPauseBetweenCheckpoints, baseInterval + 1L);
     }
 
+    //scheduleTriggerWithDelay方法启动了一个checkpoint操作定时触发器
+    //这段代码设置了一个定时触发任务。任务逻辑在SchedulerTrigger中。
+    //（这个SchedulerFuture又是个什么情况？）
     private ScheduledFuture<?> scheduleTriggerWithDelay(long initDelay) {
         return timer.scheduleAtFixedRate(
                 new ScheduledTrigger(), initDelay, baseInterval, TimeUnit.MILLISECONDS);
@@ -1819,13 +1839,16 @@ public class CheckpointCoordinator {
     // ------------------------------------------------------------------------
     //  job status listener that schedules / cancels periodic checkpoints
     // ------------------------------------------------------------------------
-
+    //activator是激活器，deactivator是失活剂。
+    //就是负责监听被调度/取消的checkpoint？
+    //此方法创建了一个Job状态监听器。
+    //如果Job的运行状态发生变化会调用listener的jobStatusChanges
     public JobStatusListener createActivatorDeactivator() {
         synchronized (lock) {
             if (shutdown) {
                 throw new IllegalArgumentException("Checkpoint coordinator is shut down");
             }
-
+            //这里就是创建job状态监听器吧？
             if (jobStatusListener == null) {
                 jobStatusListener = new CheckpointCoordinatorDeActivator(this);
             }
@@ -1851,9 +1874,11 @@ public class CheckpointCoordinator {
 
     // ------------------------------------------------------------------------
 
+    //starCheckpointScheduler中要创建新的scheduler，scheduleTriggerWithDelay方法中，启动了checkpoint操作定时触发器。定时触发任务的实际逻辑就在ScheduledTrigger中。
     private final class ScheduledTrigger implements Runnable {
 
         @Override
+        //这里的run方法内仅有一个调用triggerCheckpoint.
         public void run() {
             try {
                 triggerCheckpoint(true);
@@ -2065,6 +2090,7 @@ public class CheckpointCoordinator {
             return;
         }
         Map<JobVertexID, Integer> vertices =
+                //这里是拿到所有需要接收checkpoint确认消息的task和完成的task。
                 Stream.concat(
                                 checkpoint.getCheckpointPlan().getTasksToWaitFor().stream(),
                                 checkpoint.getCheckpointPlan().getFinishedTasks().stream())
@@ -2075,7 +2101,7 @@ public class CheckpointCoordinator {
                                 toMap(
                                         ExecutionJobVertex::getJobVertexId,
                                         ExecutionJobVertex::getParallelism));
-
+        //此处应当是获取状态report回调
         PendingCheckpointStats pendingCheckpointStats =
                 statsTracker.reportPendingCheckpoint(
                         checkpoint.getCheckpointID(),

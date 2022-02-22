@@ -794,6 +794,7 @@ public class JobMaster extends PermanentlyFencedRpcEndpoint<JobMasterId>
     @Override
     //JobMaster触发savepoint的时候，启动checkpoint的过程。
     //具体看triggerSavepoint方法,具体其调用的为SchedulerBase的方法
+    //JobMaster的triggerSavepoint里的schedulerNG.triggerSavepoint调用的是SchedulerBase的方法
     public CompletableFuture<String> triggerSavepoint(
             @Nullable final String targetDirectory, final boolean cancelJob, final Time timeout) {
 
